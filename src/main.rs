@@ -1,4 +1,4 @@
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 
 use clap::Parser;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -8,26 +8,35 @@ fn main() {
 
     let backends: Vec<Backend> = {
         let mut acc = Vec::new();
-        for _ in 0 .. 1 {
-            acc.push(Backend { id: acc.len() as u32, zone: 'a' });
+        for _ in 0..1 {
+            acc.push(Backend {
+                id: acc.len() as u32,
+                zone: 'a',
+            });
         }
-        for _ in 0 .. 5 {
-            acc.push(Backend { id: acc.len() as u32, zone: 'b' });
+        for _ in 0..5 {
+            acc.push(Backend {
+                id: acc.len() as u32,
+                zone: 'b',
+            });
         }
-        for _ in 0 .. 9 {
-            acc.push(Backend { id: acc.len() as u32, zone: 'c' });
+        for _ in 0..9 {
+            acc.push(Backend {
+                id: acc.len() as u32,
+                zone: 'c',
+            });
         }
         acc
     };
     let clients: Vec<Client> = {
         let mut acc = Vec::new();
-        for _ in 0 .. 3 {
+        for _ in 0..3 {
             acc.push(Client::new('a', backends.clone()));
         }
-        for _ in 0 .. 3 {
+        for _ in 0..3 {
             acc.push(Client::new('b', backends.clone()));
         }
-        for _ in 0 .. 3 {
+        for _ in 0..3 {
             acc.push(Client::new('c', backends.clone()));
         }
         acc
@@ -35,7 +44,7 @@ fn main() {
 
     let mut tally = vec![0; backends.len()];
     for mut client in clients {
-        for _ in 0 .. args.iterations {
+        for _ in 0..args.iterations {
             tally[client.sample() as usize] += 1;
         }
     }
@@ -55,7 +64,7 @@ struct Args {
 struct Client {
     zone: char,
     backends: Vec<Backend>,
-    affinity: f64,
+    rho: f64,
     prng: SmallRng,
 }
 impl Client {
@@ -67,13 +76,13 @@ impl Client {
             }
             acc
         };
-        let highest = *capacities.values().max().expect("empty capacities");
-        let chi = capacities.get(&zone).copied().unwrap_or_default() as f64 / highest as f64;
-        eprintln!("{zone} --> {chi} [{capacities:?}]");
+        let biggest_zone = *capacities.values().max().expect("empty capacities");
+        let in_zone = capacities.get(&zone).copied().unwrap_or_default();
+        let rho = 1.0 + (biggest_zone - in_zone) as f64 / backends.len() as f64;
         Self {
             zone,
             backends,
-            affinity: chi,
+            rho,
             prng: SmallRng::seed_from_u64(42),
         }
     }
@@ -83,9 +92,8 @@ impl Client {
         for b in &self.backends {
             let mut weight = 1.0;
             if b.zone != self.zone {
-                weight *= 1.0 - self.affinity;
+                weight -= 1.0 / self.rho;
             }
-            eprintln!("[{client_az} --> {backend_az}] {weight}", client_az = self.zone, backend_az = b.zone, weight = weight);
             total_weight += weight;
             if self.prng.gen::<f64>() < weight / total_weight {
                 cur = b.id;
