@@ -3,6 +3,28 @@ use std::collections::HashMap;
 use clap::Parser;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
+/*
+Sample output from
+$ cargo run --release -- --iterations=1000000
+
+[a] 601164
+[b] 600333
+[b] 598227
+[b] 600936
+[b] 598203
+[b] 599478
+[c] 599397
+[c] 598491
+[c] 600216
+[c] 600138
+[c] 601620
+[c] 600462
+[c] 597711
+[c] 602604
+[c] 601020
+
+*/
+
 fn main() {
     let args = Args::parse();
 
@@ -78,7 +100,7 @@ impl Client {
         };
         let biggest_zone = *capacities.values().max().expect("empty capacities");
         let in_zone = capacities.get(&zone).copied().unwrap_or_default();
-        let rho = 1.0 + (biggest_zone - in_zone) as f64 / backends.len() as f64;
+        let rho = (biggest_zone - in_zone) as f64 / backends.len() as f64;
         Self {
             zone,
             backends,
@@ -90,10 +112,11 @@ impl Client {
         let mut cur = 0;
         let mut total_weight = 0.0;
         for b in &self.backends {
-            let mut weight = 1.0;
-            if b.zone != self.zone {
-                weight -= 1.0 / self.rho;
-            }
+            let weight = if b.zone == self.zone {
+                1.0
+            } else {
+                1.0 - 1.0 / (1.0 + self.rho)
+            };
             total_weight += weight;
             if self.prng.gen::<f64>() < weight / total_weight {
                 cur = b.id;
