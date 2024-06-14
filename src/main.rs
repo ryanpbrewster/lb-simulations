@@ -79,7 +79,11 @@ fn main() {
     }
 
     for (backend, count) in backends.iter().zip(tally) {
-        println!("[{zone}] {frac:.05}", zone = backend.zone, frac = count as f64 / (total / backends.len()) as f64);
+        println!(
+            "[{zone}] {frac:.05}",
+            zone = backend.zone,
+            frac = count as f64 / (total / backends.len()) as f64
+        );
     }
     println!(
         "% in-zone = {fraction}",
@@ -102,39 +106,37 @@ struct Client {
 impl Client {
     fn new(zone: char, backends: Vec<Backend>) -> Self {
         let capacities = {
-            let mut acc: HashMap<char, u32> = HashMap::new();
-            acc.insert(zone, 0); // ensure that the client can see its own zone
+            let mut acc: HashMap<char, f64> = HashMap::new();
+            acc.insert(zone, 0.0); // ensure that the client can see its own zone
             for b in &backends {
-                *acc.entry(b.zone).or_default() += 1;
+                *acc.entry(b.zone).or_default() += 1.0;
             }
             acc
         };
         let avg = backends.len() as f64 / capacities.len() as f64;
-        let bz = capacities[&zone] as f64;
-        let surplus: HashMap<char, f64> = capacities
-            .clone()
-            .into_iter()
-            .map(|(zone, cap)| (zone, cap as f64 - avg))
-            .collect();
-        let total_surplus: f64 = surplus.values().copied().filter(|&s| s > 0.0).sum();
+        let bz = capacities[&zone];
+        let total_surplus: f64 = capacities
+            .values()
+            .copied()
+            .map(|cap| if cap > avg { cap - avg } else { 0.0 })
+            .sum();
         let backends = backends
             .into_iter()
             .map(|b| {
-                if b.zone == zone {
-                    return (if bz < avg { 1.0 / avg } else { 1.0 / bz }, b);
-                }
-                if bz >= avg {
-                    return (0.0, b);
-                }
+                let zone_cap = capacities[&b.zone];
+                let zone_weight = if b.zone == zone {
+                    if bz >= avg {
+                        1.0
+                    } else {
+                        bz / avg
+                    }
+                } else if bz >= avg || zone_cap <= avg {
+                    0.0
+                } else {
+                    (1.0 - bz / avg) * (zone_cap - avg) / total_surplus
+                };
 
-                let spill = 1.0 - bz / avg;
-                let cap = capacities[&b.zone] as f64;
-                let extra = cap - avg;
-                if extra <= 0.0 {
-                    return (0.0, b);
-                }
-                let weight = spill * extra / total_surplus / cap;
-                (weight, b)
+                (zone_weight / zone_cap, b)
             })
             .collect();
         Self {
