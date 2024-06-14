@@ -81,7 +81,10 @@ fn main() {
     for (backend, count) in backends.iter().zip(tally) {
         println!("[{zone}] {count}", zone = backend.zone, count = count);
     }
-    println!("% in-zone = {fraction}", fraction = in_zone as f64 / total as f64);
+    println!(
+        "% in-zone = {fraction}",
+        fraction = in_zone as f64 / total as f64
+    );
 }
 
 #[derive(Parser)]
@@ -93,38 +96,57 @@ struct Args {
 #[derive(Clone)]
 struct Client {
     zone: char,
-    backends: Vec<Backend>,
-    rho: f64,
+    backends: Vec<(f64, Backend)>,
     prng: SmallRng,
 }
 impl Client {
     fn new(zone: char, backends: Vec<Backend>) -> Self {
         let capacities = {
             let mut acc: HashMap<char, u32> = HashMap::new();
+            acc.insert(zone, 0); // ensure that the client can see its own zone
             for b in &backends {
                 *acc.entry(b.zone).or_default() += 1;
             }
             acc
         };
-        let biggest_zone = *capacities.values().max().expect("empty capacities");
-        let in_zone = capacities.get(&zone).copied().unwrap_or_default();
-        let rho = (biggest_zone - in_zone) as f64 / backends.len() as f64;
+        let avg = backends.len() as f64 / capacities.len() as f64;
+        let bz = capacities[&zone] as f64;
+        let surplus: HashMap<char, f64> = capacities
+            .clone()
+            .into_iter()
+            .map(|(zone, cap)| (zone, cap as f64 - avg))
+            .collect();
+        let total_surplus: f64 = surplus.values().copied().filter(|&s| s > 0.0).sum();
+        let backends = backends
+            .into_iter()
+            .map(|b| {
+                if b.zone == zone {
+                    return (if bz < avg { 1.0 / avg } else { 1.0 / bz }, b);
+                }
+                if bz >= avg {
+                    return (0.0, b);
+                }
+
+                let spill = 1.0 - bz / avg;
+                let cap = capacities[&b.zone] as f64;
+                let extra = cap - avg;
+                if extra <= 0.0 {
+                    return (0.0, b);
+                }
+                let weight = spill * extra / total_surplus / cap;
+                (weight, b)
+            })
+            .collect();
         Self {
             zone,
             backends,
-            rho,
             prng: SmallRng::seed_from_u64(42),
         }
     }
     fn sample(&mut self) -> u32 {
         let mut cur = 0;
         let mut total_weight = 0.0;
-        for b in &self.backends {
-            let weight = if b.zone == self.zone {
-                1.0
-            } else {
-                1.0 - 1.0 / (1.0 + self.rho)
-            };
+        for (weight, b) in &self.backends {
             total_weight += weight;
             if self.prng.gen::<f64>() < weight / total_weight {
                 cur = b.id;
@@ -134,7 +156,7 @@ impl Client {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 struct Backend {
     id: u32,
     zone: char,
