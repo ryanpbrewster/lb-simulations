@@ -50,7 +50,7 @@ fn main() {
         }
         acc
     };
-    let clients: Vec<Client> = {
+    let mut clients: Vec<Client> = {
         let mut acc = Vec::new();
         for _ in 0..3 {
             acc.push(Client::new('a', backends.clone()));
@@ -67,7 +67,7 @@ fn main() {
     let mut tally = vec![0; backends.len()];
     let mut in_zone = 0;
     let mut total = 0;
-    for mut client in clients {
+    for client in &mut clients {
         for _ in 0..args.iterations {
             let b = client.sample() as usize;
             tally[b] += 1;
@@ -79,7 +79,7 @@ fn main() {
     }
 
     for (backend, count) in backends.iter().zip(tally) {
-        println!("[{zone}] {count}", zone = backend.zone, count = count);
+        println!("[{zone}] {frac:.05}", zone = backend.zone, frac = count as f64 / (total / backends.len()) as f64);
     }
     println!(
         "% in-zone = {fraction}",
