@@ -65,15 +65,23 @@ fn main() {
     };
 
     let mut tally = vec![0; backends.len()];
+    let mut in_zone = 0;
+    let mut total = 0;
     for mut client in clients {
         for _ in 0..args.iterations {
-            tally[client.sample() as usize] += 1;
+            let b = client.sample() as usize;
+            tally[b] += 1;
+            if backends[b].zone == client.zone {
+                in_zone += 1;
+            }
+            total += 1;
         }
     }
 
     for (backend, count) in backends.iter().zip(tally) {
         println!("[{zone}] {count}", zone = backend.zone, count = count);
     }
+    println!("% in-zone = {fraction}", fraction = in_zone as f64 / total as f64);
 }
 
 #[derive(Parser)]
