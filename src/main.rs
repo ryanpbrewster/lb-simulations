@@ -7,22 +7,22 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 Sample output from
 $ cargo run --release -- --iterations=1000000
 
-[a] 601164
-[b] 600333
-[b] 598227
-[b] 600936
-[b] 598203
-[b] 599478
-[c] 599397
-[c] 598491
-[c] 600216
-[c] 600138
-[c] 601620
-[c] 600462
-[c] 597711
-[c] 602604
-[c] 601020
-
+[a] 0.99992
+[b] 1.00138
+[b] 0.99883
+[b] 1.00172
+[b] 0.99911
+[b] 0.99896
+[c] 1.00092
+[c] 0.99619
+[c] 1.00335
+[c] 1.00154
+[c] 0.99987
+[c] 1.00022
+[c] 0.99613
+[c] 1.00119
+[c] 1.00066
+% in-zone = 0.7333283333333334
 */
 
 fn main() {
@@ -34,18 +34,21 @@ fn main() {
             acc.push(Backend {
                 id: acc.len() as u32,
                 zone: 'a',
+                capacity: 1.0,
             });
         }
         for _ in 0..5 {
             acc.push(Backend {
                 id: acc.len() as u32,
                 zone: 'b',
+                capacity: 1.0,
             });
         }
         for _ in 0..9 {
             acc.push(Backend {
                 id: acc.len() as u32,
                 zone: 'c',
+                capacity: 1.0,
             });
         }
         acc
@@ -103,42 +106,60 @@ struct Client {
 }
 impl Client {
     fn new(zone: char, backends: Vec<Backend>) -> Self {
-        let capacities = {
+        let mut total_capacity = 0.0;
+        let per_zone_capacity = {
             let mut acc: HashMap<char, f64> = HashMap::new();
             for b in &backends {
-                *acc.entry(b.zone).or_default() += 1.0;
+                total_capacity += b.capacity;
+                *acc.entry(b.zone).or_default() += b.capacity;
             }
             acc
         };
-        let avg = backends.len() as f64 / capacities.len() as f64;
-        let bz = capacities.get(&zone).copied().unwrap_or_default();
-        let total_surplus: f64 = capacities
+        let num_zones = per_zone_capacity.len() as f64;
+        let avg_capacity = total_capacity / num_zones;
+        let my_zone_capacity = per_zone_capacity.get(&zone).copied().unwrap_or_default();
+        let surplus_capacity: f64 = per_zone_capacity
             .values()
             .copied()
-            .map(|cap| if cap > avg { cap - avg } else { 0.0 })
-            .sum();
-        let backends = backends
-            .into_iter()
-            .map(|b| {
-                let zone_cap = capacities[&b.zone];
-                let zone_weight = if b.zone == zone {
-                    if bz >= avg {
-                        1.0
-                    } else {
-                        bz / avg
-                    }
-                } else if bz >= avg || zone_cap <= avg {
-                    0.0
+            .map(|cap| {
+                if cap > avg_capacity {
+                    cap - avg_capacity
                 } else {
-                    (1.0 - bz / avg) * (zone_cap - avg) / total_surplus
-                };
-
-                (zone_weight / zone_cap, b)
+                    0.0
+                }
             })
+            .sum();
+        let compute_weight = |b: &Backend| -> f64 {
+            if my_zone_capacity >= avg_capacity {
+                // If we are from an over-capacity zone, stay entirely in-zone.
+                return if b.zone == zone { b.capacity } else { 0.0 };
+            }
+            // If we are from an under-capacity zone, we can't send _all_
+            // traffic in-zone or we'll overload our backends.  So we need to
+            // send some traffic in-zone and some cross-zone.
+            let in_zone = my_zone_capacity / avg_capacity;
+            let cross_zone = 1.0 - in_zone;
+
+            let zone_cap = per_zone_capacity[&b.zone];
+            let zone_weight = if b.zone == zone {
+                in_zone
+            } else if zone_cap <= avg_capacity {
+                // If the target zone is under-capacity, don't send any traffic.
+                0.0
+            } else {
+                // Send cross-zone traffic proportional to how much of the surplus capacity
+                // is present in that zone.
+                cross_zone * (zone_cap - avg_capacity) / surplus_capacity
+            };
+            b.capacity * zone_weight / zone_cap
+        };
+        let weighted_backends = backends
+            .into_iter()
+            .map(|b| (compute_weight(&b), b))
             .collect();
         Self {
             zone,
-            backends,
+            backends: weighted_backends,
             prng: SmallRng::seed_from_u64(42),
         }
     }
@@ -159,4 +180,5 @@ impl Client {
 struct Backend {
     id: u32,
     zone: char,
+    capacity: f64,
 }
