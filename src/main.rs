@@ -52,15 +52,13 @@ fn main() {
     };
     let mut clients: Vec<Client> = {
         let mut acc = Vec::new();
-        for _ in 0..3 {
-            acc.push(Client::new('a', backends.clone()));
-        }
-        for _ in 0..3 {
-            acc.push(Client::new('b', backends.clone()));
-        }
-        for _ in 0..3 {
-            acc.push(Client::new('c', backends.clone()));
-        }
+        acc.push(Client::new('a', backends.clone()));
+        acc.push(Client::new('b', backends.clone()));
+        acc.push(Client::new('c', backends.clone()));
+        // If there were a Zone D without any backends, clients in zones A..C won't even
+        // know it exists. That screws up their calculations and the overall
+        // distribution is skewed slightly. Uncomment this to see the skewed output.
+        // acc.push(Client::new('d', backends.clone()));
         acc
     };
 
@@ -107,14 +105,13 @@ impl Client {
     fn new(zone: char, backends: Vec<Backend>) -> Self {
         let capacities = {
             let mut acc: HashMap<char, f64> = HashMap::new();
-            acc.insert(zone, 0.0); // ensure that the client can see its own zone
             for b in &backends {
                 *acc.entry(b.zone).or_default() += 1.0;
             }
             acc
         };
         let avg = backends.len() as f64 / capacities.len() as f64;
-        let bz = capacities[&zone];
+        let bz = capacities.get(&zone).copied().unwrap_or_default();
         let total_surplus: f64 = capacities
             .values()
             .copied()
