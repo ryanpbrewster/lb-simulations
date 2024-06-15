@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use clap::Parser;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -101,14 +101,16 @@ struct Args {
 #[derive(Clone)]
 struct Client {
     zone: char,
-    backends: Vec<(f64, Backend)>,
+    // How this client should modify the backend weights in any given zone.
+    zonal_multiplier: BTreeMap<char, f64>,
+    backends: Vec<Backend>,
     prng: SmallRng,
 }
 impl Client {
     fn new(zone: char, backends: Vec<Backend>) -> Self {
         let mut total_capacity = 0.0;
         let per_zone_capacity = {
-            let mut acc: HashMap<char, f64> = HashMap::new();
+            let mut acc: BTreeMap<char, f64> = BTreeMap::new();
             for b in &backends {
                 total_capacity += b.capacity;
                 *acc.entry(b.zone).or_default() += b.capacity;
@@ -129,44 +131,47 @@ impl Client {
                 }
             })
             .sum();
-        let compute_weight = |b: &Backend| -> f64 {
-            if my_zone_capacity >= avg_capacity {
-                // If we are from an over-capacity zone, stay entirely in-zone.
-                return if b.zone == zone { b.capacity } else { 0.0 };
-            }
+        let zone_weights = if my_zone_capacity >= avg_capacity {
+            // If we are from an over-capacity zone, stay entirely in-zone.
+            [(zone, 1.0)].into_iter().collect()
+        } else {
             // If we are from an under-capacity zone, we can't send _all_
             // traffic in-zone or we'll overload our backends.  So we need to
             // send some traffic in-zone and some cross-zone.
             let in_zone = my_zone_capacity / avg_capacity;
             let cross_zone = 1.0 - in_zone;
-
-            let zone_cap = per_zone_capacity[&b.zone];
-            let zone_weight = if b.zone == zone {
-                in_zone
-            } else if zone_cap <= avg_capacity {
-                // If the target zone is under-capacity, don't send any traffic.
-                0.0
-            } else {
-                // Send cross-zone traffic proportional to how much of the surplus capacity
-                // is present in that zone.
-                cross_zone * (zone_cap - avg_capacity) / surplus_capacity
-            };
-            b.capacity * zone_weight / zone_cap
+            per_zone_capacity
+                .into_iter()
+                .map(|(z, zone_cap)| {
+                    let zone_weight = if z == zone {
+                        in_zone
+                    } else if zone_cap <= avg_capacity {
+                        // If the target zone is under-capacity, don't send any traffic.
+                        0.0
+                    } else {
+                        // Send cross-zone traffic proportional to how much of the surplus capacity
+                        // is present in that zone.
+                        cross_zone * (zone_cap - avg_capacity) / surplus_capacity
+                    };
+                    (z, zone_weight / zone_cap)
+                })
+                .collect()
         };
-        let weighted_backends = backends
-            .into_iter()
-            .map(|b| (compute_weight(&b), b))
-            .collect();
         Self {
             zone,
-            backends: weighted_backends,
+            zonal_multiplier: zone_weights,
+            backends,
             prng: SmallRng::seed_from_u64(42),
         }
     }
     fn sample(&mut self) -> u32 {
         let mut cur = 0;
         let mut total_weight = 0.0;
-        for (weight, b) in &self.backends {
+        for b in &self.backends {
+            let Some(&lambda) = self.zonal_multiplier.get(&b.zone) else {
+                continue;
+            };
+            let weight = lambda * b.capacity;
             total_weight += weight;
             if self.prng.gen::<f64>() < weight / total_weight {
                 cur = b.id;
