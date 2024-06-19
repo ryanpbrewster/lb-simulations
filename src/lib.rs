@@ -8,19 +8,11 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 struct BackendId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Zone(u8);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Subset(Option<u8>);
-impl Subset {
-    fn of(v: u8) -> Self {
-        Self(Some(v))
-    }
-}
 
 #[derive(Clone, Debug)]
 struct Backend {
     id: BackendId,
     zone: Zone,
-    subset: Subset,
     capacity: f64,
 }
 
@@ -90,13 +82,10 @@ impl Client {
             prng: SmallRng::seed_from_u64(42),
         }
     }
-    fn sample(&mut self, subset: Subset) -> Option<BackendId> {
+    fn sample(&mut self) -> Option<BackendId> {
         let mut cur: Option<BackendId> = None;
         let mut total_weight = 0.0;
         for b in &self.backends {
-            if b.subset != subset {
-                continue;
-            }
             let Some(&lambda) = self.zonal_multiplier.get(&b.zone) else {
                 continue;
             };
@@ -148,7 +137,6 @@ mod test {
                         id,
                         zone,
                         capacity: 1.0,
-                        subset: Subset::default(),
                     },
                 )
             })
@@ -170,7 +158,7 @@ mod test {
         let mut total = 0;
         for client in &mut clients {
             for _ in 0..iterations {
-                let b = client.sample(Subset::default()).unwrap();
+                let b = client.sample().unwrap();
                 *tally.entry(b).or_default() += 1;
                 if backends[&b].zone == client.zone {
                     in_zone += 1;
@@ -188,34 +176,5 @@ mod test {
 
         let in_zone_frac = in_zone as f64 / total as f64;
         assert!(in_zone_frac > 0.70, "in_zone = {in_zone_frac}");
-    }
-
-    #[test]
-    fn sample_subset_is_respected() {
-        let mut mk_backend = {
-            let mut idx = 0;
-            move |subset| {
-                let id = BackendId(idx);
-                idx += 1;
-                Backend {
-                    id,
-                    zone: Zone(b'a'),
-                    capacity: 1.0,
-                    subset,
-                }
-            }
-        };
-        let b1 = mk_backend(Subset::of(1));
-        let b2 = mk_backend(Subset::of(2));
-
-        let mut client = Client::new(Zone(b'a'), vec![b1.clone(), b2.clone()]);
-
-        for _ in 0..10 {
-            assert_eq!(client.sample(Subset::of(1)), Some(b1.id));
-        }
-        for _ in 0..10 {
-            assert_eq!(client.sample(Subset::of(2)), Some(b2.id));
-        }
-        assert_eq!(client.sample(Subset::of(3)), None);
     }
 }
