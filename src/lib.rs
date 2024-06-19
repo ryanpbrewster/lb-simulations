@@ -4,19 +4,34 @@ use std::collections::BTreeMap;
 
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BackendId(u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Zone(u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Subset(u8);
+
+#[derive(Clone, Debug)]
+struct Backend {
+    id: BackendId,
+    zone: Zone,
+    subset: Subset,
+    capacity: f64,
+}
+
 #[derive(Clone)]
 struct Client {
-    zone: char,
+    zone: Zone,
     // How this client should modify the backend weights in any given zone.
-    zonal_multiplier: BTreeMap<char, f64>,
+    zonal_multiplier: BTreeMap<Zone, f64>,
     backends: Vec<Backend>,
     prng: SmallRng,
 }
 impl Client {
-    fn new(zone: char, backends: Vec<Backend>) -> Self {
+    fn new(zone: Zone, backends: Vec<Backend>) -> Self {
         let mut total_capacity = 0.0;
         let per_zone_capacity = {
-            let mut acc: BTreeMap<char, f64> = BTreeMap::new();
+            let mut acc: BTreeMap<Zone, f64> = BTreeMap::new();
             for b in &backends {
                 total_capacity += b.capacity;
                 *acc.entry(b.zone).or_default() += b.capacity;
@@ -70,8 +85,8 @@ impl Client {
             prng: SmallRng::seed_from_u64(42),
         }
     }
-    fn sample(&mut self, p: fn(&Backend) -> bool) -> u32 {
-        let mut cur = 0;
+    fn sample(&mut self, p: fn(&Backend) -> bool) -> Option<BackendId> {
+        let mut cur: Option<BackendId> = None;
         let mut total_weight = 0.0;
         for b in &self.backends {
             if !p(b) {
@@ -83,18 +98,11 @@ impl Client {
             let weight = lambda * b.capacity;
             total_weight += weight;
             if self.prng.gen::<f64>() < weight / total_weight {
-                cur = b.id;
+                cur = Some(b.id);
             }
         }
         cur
     }
-}
-
-#[derive(Default, Clone, Debug)]
-struct Backend {
-    id: u32,
-    zone: char,
-    capacity: f64,
 }
 
 #[cfg(test)]
@@ -104,8 +112,6 @@ mod test {
     fn naive() {
         /*
         Sample output from
-        $ cargo run --release -- --iterations=1000000
-
         [a] 0.99992
         [b] 1.00138
         [b] 0.99883
@@ -125,51 +131,43 @@ mod test {
         */
 
         let iterations = 100_000;
-        let backends: Vec<Backend> = {
-            let mut acc = Vec::new();
-            for _ in 0..1 {
-                acc.push(Backend {
-                    id: acc.len() as u32,
-                    zone: 'a',
-                    capacity: 1.0,
-                });
-            }
-            for _ in 0..5 {
-                acc.push(Backend {
-                    id: acc.len() as u32,
-                    zone: 'b',
-                    capacity: 1.0,
-                });
-            }
-            for _ in 0..9 {
-                acc.push(Backend {
-                    id: acc.len() as u32,
-                    zone: 'c',
-                    capacity: 1.0,
-                });
-            }
-            acc
-        };
-        let mut clients: Vec<Client> = {
-            let mut acc = Vec::new();
-            acc.push(Client::new('a', backends.clone()));
-            acc.push(Client::new('b', backends.clone()));
-            acc.push(Client::new('c', backends.clone()));
-            // If there were a Zone D without any backends, clients in zones A..C won't even
-            // know it exists. That screws up their calculations and the overall
-            // distribution is skewed slightly. Uncomment this to see the skewed output.
-            // acc.push(Client::new('d', backends.clone()));
-            acc
-        };
+        let backends: BTreeMap<BackendId, Backend> = [(b'a', 1), (b'b', 5), (b'c', 9)]
+            .into_iter()
+            .flat_map(|(zone, count)| std::iter::repeat(Zone(zone)).take(count))
+            .enumerate()
+            .map(|(idx, zone)| {
+                let id = BackendId(idx as u32);
+                (
+                    id,
+                    Backend {
+                        id,
+                        zone,
+                        capacity: 1.0,
+                        subset: Subset(0),
+                    },
+                )
+            })
+            .collect();
 
-        let mut tally = vec![0; backends.len()];
+        // If there were a Zone D without any backends, clients in zones A..C won't even
+        // know it exists. That screws up their calculations and the overall
+        // distribution is skewed slightly. Uncomment this to see the skewed output.
+        let mut clients: Vec<Client> = [b'a', b'b', b'c']
+            .into_iter()
+            .map(|zone| {
+                let zone = Zone(zone);
+                Client::new(zone, backends.values().cloned().collect())
+            })
+            .collect();
+
+        let mut tally: BTreeMap<BackendId, u32> = BTreeMap::new();
         let mut in_zone = 0;
         let mut total = 0;
         for client in &mut clients {
             for _ in 0..iterations {
-                let b = client.sample(|_| true) as usize;
-                tally[b] += 1;
-                if backends[b].zone == client.zone {
+                let b = client.sample(|_| true).unwrap();
+                *tally.entry(b).or_default() += 1;
+                if backends[&b].zone == client.zone {
                     in_zone += 1;
                 }
                 total += 1;
@@ -177,8 +175,8 @@ mod test {
         }
 
         let avg = total as f64 / backends.len() as f64;
-        let min_load = tally.iter().min().copied().unwrap() as f64 / avg;
-        let max_load = tally.iter().max().copied().unwrap() as f64 / avg;
+        let min_load = tally.values().min().copied().unwrap() as f64 / avg;
+        let max_load = tally.values().max().copied().unwrap() as f64 / avg;
 
         assert!(0.95 <= min_load, "min load = {min_load}");
         assert!(max_load <= 1.05, "max load = {max_load}");
