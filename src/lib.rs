@@ -8,8 +8,8 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 struct BackendId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Zone(u8);
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Subset(u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Subset(Option<u8>);
 
 #[derive(Clone, Debug)]
 struct Backend {
@@ -85,11 +85,11 @@ impl Client {
             prng: SmallRng::seed_from_u64(42),
         }
     }
-    fn sample(&mut self, p: fn(&Backend) -> bool) -> Option<BackendId> {
+    fn sample(&mut self, subset: Subset) -> Option<BackendId> {
         let mut cur: Option<BackendId> = None;
         let mut total_weight = 0.0;
         for b in &self.backends {
-            if !p(b) {
+            if b.subset != subset {
                 continue;
             }
             let Some(&lambda) = self.zonal_multiplier.get(&b.zone) else {
@@ -143,7 +143,7 @@ mod test {
                         id,
                         zone,
                         capacity: 1.0,
-                        subset: Subset(0),
+                        subset: Subset::default(),
                     },
                 )
             })
@@ -165,7 +165,7 @@ mod test {
         let mut total = 0;
         for client in &mut clients {
             for _ in 0..iterations {
-                let b = client.sample(|_| true).unwrap();
+                let b = client.sample(Subset::default()).unwrap();
                 *tally.entry(b).or_default() += 1;
                 if backends[&b].zone == client.zone {
                     in_zone += 1;
