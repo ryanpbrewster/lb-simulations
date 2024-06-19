@@ -10,6 +10,11 @@ struct BackendId(u32);
 struct Zone(u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Subset(Option<u8>);
+impl Subset {
+    fn of(v: u8) -> Self {
+        Self(Some(v))
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Backend {
@@ -109,7 +114,7 @@ impl Client {
 mod test {
     use super::*;
     #[test]
-    fn naive() {
+    fn zonal_affinity_is_biased_but_uniform() {
         /*
         Sample output from
         [a] 0.99992
@@ -183,5 +188,34 @@ mod test {
 
         let in_zone_frac = in_zone as f64 / total as f64;
         assert!(in_zone_frac > 0.70, "in_zone = {in_zone_frac}");
+    }
+
+    #[test]
+    fn sample_subset_is_respected() {
+        let mut mk_backend = {
+            let mut idx = 0;
+            move |subset| {
+                let id = BackendId(idx);
+                idx += 1;
+                Backend {
+                    id,
+                    zone: Zone(b'a'),
+                    capacity: 1.0,
+                    subset,
+                }
+            }
+        };
+        let b1 = mk_backend(Subset::of(1));
+        let b2 = mk_backend(Subset::of(2));
+
+        let mut client = Client::new(Zone(b'a'), vec![b1.clone(), b2.clone()]);
+
+        for _ in 0..10 {
+            assert_eq!(client.sample(Subset::of(1)), Some(b1.id));
+        }
+        for _ in 0..10 {
+            assert_eq!(client.sample(Subset::of(2)), Some(b2.id));
+        }
+        assert_eq!(client.sample(Subset::of(3)), None);
     }
 }
