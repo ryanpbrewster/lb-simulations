@@ -17,14 +17,13 @@ struct Backend {
 }
 
 #[derive(Clone)]
-struct Client {
-    zone: Zone,
+struct Picker {
     // How this client should modify the backend weights in any given zone.
     zonal_multiplier: BTreeMap<Zone, f64>,
     backends: Vec<Backend>,
     prng: SmallRng,
 }
-impl Client {
+impl Picker {
     fn new(zone: Zone, backends: Vec<Backend>) -> Self {
         let mut total_capacity = 0.0;
         let per_zone_capacity = {
@@ -76,7 +75,6 @@ impl Client {
                 .collect()
         };
         Self {
-            zone,
             zonal_multiplier: zone_weights,
             backends,
             prng: SmallRng::seed_from_u64(42),
@@ -142,30 +140,32 @@ mod test {
             })
             .collect();
 
-        // If there were a Zone D without any backends, clients in zones A..C won't even
-        // know it exists. That screws up their calculations and the overall
-        // distribution is skewed slightly. Uncomment this to see the skewed output.
-        let mut clients: Vec<Client> = [b'a', b'b', b'c']
-            .into_iter()
-            .map(|zone| {
-                let zone = Zone(zone);
-                Client::new(zone, backends.values().cloned().collect())
-            })
-            .collect();
+        let client_zones = [
+            Zone(b'a'),
+            Zone(b'b'),
+            Zone(b'c'),
+            // If there were a Zone D without any backends, clients in zones A..C won't even
+            // know it exists. That screws up their calculations and the overall
+            // distribution is skewed slightly. Uncomment this to see the skewed output.
+            // Zone(b'd'),
+        ];
 
         let mut tally: BTreeMap<BackendId, u32> = BTreeMap::new();
         let mut in_zone = 0;
         let mut total = 0;
-        for client in &mut clients {
+        for client_zone in client_zones {
+            let mut picker = Picker::new(client_zone, backends.values().cloned().collect());
             for _ in 0..iterations {
-                let b = client.sample().unwrap();
+                let b = picker.sample().unwrap();
                 *tally.entry(b).or_default() += 1;
-                if backends[&b].zone == client.zone {
+                if backends[&b].zone == client_zone {
                     in_zone += 1;
                 }
                 total += 1;
             }
         }
+
+        println!("{tally:#?}");
 
         let avg = total as f64 / backends.len() as f64;
         let min_load = tally.values().min().copied().unwrap() as f64 / avg;
@@ -175,6 +175,6 @@ mod test {
         assert!(max_load <= 1.05, "max load = {max_load}");
 
         let in_zone_frac = in_zone as f64 / total as f64;
-        assert!(in_zone_frac > 0.70, "in_zone = {in_zone_frac}");
+        assert!(in_zone_frac >= 0.733, "in_zone = {in_zone_frac}");
     }
 }
